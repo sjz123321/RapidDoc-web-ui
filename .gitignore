@@ -1,55 +1,84 @@
-*.tar
-*.tar.gz
-*.zip
-*venv*/
+# Python cache and build output
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Local virtual environments
+.venv/
+venv/
+env/
 envs/
-slurm_logs/
+*venv*/
 
-sync1.sh
-data_preprocess_pj1
-data-preparation1
-__pycache__
-*.log
-*.pyc
-.vscode
-debug/
-*.ipynb
-.idea
-
-# vscode history
-.history
-
-.DS_Store
+# Local secrets and runtime config
 .env
-
-bad_words/
-bak/
-
-app/tests/*
-temp/
-tmp/
-tmp
-.vscode
-.vscode/
-ocr_demo
-.coveragerc
-/app/common/__init__.py
-/magic_pdf/config/__init__.py
+.env.*
+apikey.txt
+*.key
+*.pem
 source.dev.env
 
-tmp
-
-projects/web/node_modules
-projects/web/dist
-
-projects/web_demo/web_demo/static/
+# RapidDoc UI runtime output
+ui_output/
+output*/
+tmp/
+temp/
+debug/
 cli_debug/
 debug_utils/
+slurm_logs/
 
-# sphinx docs
-_build/
-
-
-output*/
-
+# Downloaded model weights and generated model files
+models/
+**/models/
 **/rapid_*_self/**/models/*
+*.onnx
+*.pth
+*.pt
+*.safetensors
+
+# Archives and packaged releases
+*.zip
+*.tar
+*.tar.gz
+*.7z
+*.rar
+RapidDoc-OCR-UI-Package/
+RapidDoc-OCR-UI-Package.zip
+
+# IDE and OS files
+.idea/
+.vscode/
+.history/
+.DS_Store
+Thumbs.db
+
+# Notebook and local experiments
+*.ipynb
+bad_words/
+bak/
+ocr_demo/
+
+# Frontend build artifacts if present
+node_modules/
+projects/web/node_modules/
+projects/web/dist/
+projects/web_demo/web_demo/static/
+
+# Upstream/local temporary paths
+app/tests/*
+data_preprocess_pj1
+data-preparation1
+sync1.sh
+/app/common/__init__.py
+/magic_pdf/config/__init__.py
+_build/

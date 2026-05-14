@@ -74,6 +74,17 @@ api = [
     "python-multipart>=0.0.6",
 ]
 
+ui = [
+    "rapid-doc[cpu]",
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "python-multipart>=0.0.6",
+    "markdown-it-py",
+    "mdit-py-plugins",
+    "pygments",
+    "pypandoc-binary",
+]
+
 word = [
     "pypandoc-binary",
 ]
@@ -115,11 +126,14 @@ homepage = "https://github.com/RapidAI"
 repository = "https://github.com/RapidAI/RapidOCR"
 issues = "https://github.com/RapidAI/RapidOCR/issues"
 
+[project.scripts]
+rapid-doc-ui = "rapid_doc_ui.app:main"
+
 [tool.setuptools.dynamic]
 version = { attr = "rapid_doc.version.__version__" }
 
 [tool.setuptools.packages.find]
-include = ["rapid_doc*"]
+include = ["rapid_doc*", "rapid_doc_ui*"]
 namespaces = false
 
 [tool.setuptools.package-data]
@@ -128,6 +142,9 @@ rapid_doc = [
     "resources/*.onnx",
     "resources/*.html",
     "resources/fasttext-langdetect/*",
+]
+rapid_doc_ui = [
+    "static/*",
 ]
 
 [tool.setuptools]

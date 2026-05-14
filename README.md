@@ -1,497 +1,224 @@
-# RapidDoc – 高速文档解析系统
+# RapidDoc OCR UI
 
-## 😺 项目介绍
+这是一个基于 RapidDoc 的本地 OCR Web UI，用于将 PDF、图片和常见 Office 文档转换为 Markdown、JSON、HTML、Word 等格式。项目保留 RapidDoc 的本地 CPU/GPU 推理能力，并增加了第三方多模态 API 接入、API Key 自动轮换、任务进度显示和常见 GPU 兼容开关。
 
-**RapidDoc 是一个轻量级、专注于文档解析的开源框架，支持 **OCR、版面分析、公式识别、表格识别和阅读顺序恢复** 等多种功能，支持将复杂 PDF 文档转换为 Markdown、JSON、WORD、HTML 格式。**
+本项目适合需要批量处理文档、保留图片资源、导出结构化结果，或在本地 OCR 基础上用第三方 VLM 做局部增强的场景。
 
-**支持docx/doc、pptx/ppt、xlsx/xls的原生解析（不使用模型）。**
+## 功能
 
-**框架基于 [Mineru](https://github.com/opendatalab/MinerU) 二次开发，移除 VLM，专注于 Pipeline 产线下的高效文档解析，在 CPU 上也能保持不错的解析速度。**
+- PDF / 图片 / Office 文档转换
+- Markdown、Middle JSON、Content JSON、HTML、Word、ZIP 输出
+- 本地 CPU / OpenVINO 模式
+- NVIDIA CUDA GPU 模式
+- V100 等老架构显卡可用的 CUDA 兼容模式
+- 第三方 OpenAI-compatible VLM API 接入
+- 硅基流动 API 默认配置
+- `apikey.txt` 自动导入和 API Key 失败轮换
+- 转换进度轮询显示
+- 图片尺寸自动补白，规避部分 VLM 的最小尺寸限制
+- Markdown 版面后处理
+- 印章识别开关，默认关闭以避免不必要的模型兼容问题
 
-**本项目所使用的默认模型主要来源于 [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) 的 [PP-StructureV3](https://www.paddleocr.ai/main/version3.x/pipeline_usage/PP-StructureV3.html) 系列（OCR、版面分析、公式识别、阅读顺序恢复，以及部分表格识别模型），并已全部转换为 ONNX 格式，支持在 CPU/GPU 上高效推理。**
+## 环境要求
 
-**同时支持自定义OCR、公式、表格模型，需实现 CustomBaseModel 的 batch_predict 方法，目前内置 [PaddleOCRVL](https://www.paddleocr.ai/main/version3.x/pipeline_usage/PaddleOCR-VL.html) 系列模型的集成。**
+- Python 3.10 到 3.13
+- Windows / Linux / macOS
+- CPU 模式推荐，兼容性最好
+- GPU 模式需要 NVIDIA CUDA 环境
 
-**KittyDoc 已经成为 RapidAI 开源家族成员**
+AMD 显卡不建议使用 CUDA GPU 模式。本项目没有内置 DirectML 实验模式。
 
----
+## 安装
 
-> ✨如果该项目对您有帮助，您的star是我不断优化的动力！！！
->
-> - [github点击前往](https://github.com/RapidAI/RapidDoc)
-> - [gitee点击前往](https://gitee.com/hzkitty/KittyDoc)
+克隆项目后进入目录：
 
-## 👏 项目特点
-
-- **OCR 识别**
-  - 使用 [RapidOCR](https://github.com/RapidAI/RapidOCR) 支持多种推理引擎
-  - CPU 下默认使用 OpenVINO（速度快，内存占用较高），GPU 下默认使用 torch
-  
-- **版面识别**
-  - 模型使用 `PP-DocLayout` 系列 ONNX 模型（v2、plus-L、L、M、S）
-    - **PP-DocLayoutV2**：自带阅读顺序，效果最好，默认使用
-    - **PP-DocLayoutV3**：自带阅读顺序，支持异形框
-    - **PP-DocLayout_plus-L**：效果好运行稳定
-    - **PP-DocLayout-L**：速度快，效果也不错
-    - **PP-DocLayout-S**：速度极快，存在部分漏检
-
-- **公式识别**
-  - 使用 `PP-FormulaNet_plus` 系列 ONNX 模型（L、M、S）
-    - **PP-FormulaNet_plus-L**：速度慢，支持onnx  
-    - **PP-FormulaNet_plus-M**：默认使用，支持onnx和torch    
-    - **PP-FormulaNet_plus-S**：速度最快，支持onnx，复杂公式精度不够
-  - 支持配置只识别行间公式
-  - cuda环境，默认使用torch推理，公式模型onnx gpu推理会报错，暂时无人解决 [PaddleOCR/issues/15125](https://github.com/PaddlePaddle/PaddleOCR/issues/15125), [PaddleX/issues/4238](https://github.com/PaddlePaddle/PaddleX/issues/4238), [Paddle2ONNX/issues/1593](https://github.com/PaddlePaddle/Paddle2ONNX/issues/1593)
-
-- **表格识别**
-  - 基于 [rapid_table_self](rapid_doc/model/table/rapid_table_self) 增强，在原有基础上增强为多模型串联方案：  
-    - **表格分类**（区分有线/无线表格）
-    - **[有线表格识别UNET](https://github.com/RapidAI/TableStructureRec)** + SLANET_plus/UNITABLE（作为无线表格识别）
-
-- **阅读顺序恢复**
-  - PP-DocLayoutV2和PP-DocLayoutV3使用版面模型自带的阅读顺序
-  - 其余版面模型，使用 PP-StructureV3 阅读顺序恢复算法，基于xycut算法和版面的结果
-
-- **推理方式**
-  - 所有模型通过 ONNXRuntime 推理，OCR可配置其他推理引擎
-  - 除了 OCR 和 PP-DocLayout-M/S 模型，OpenVINO推理会报错，暂时难以解决。[PaddleOCR/issues/16277](https://github.com/PaddlePaddle/PaddleOCR/issues/16277)
----
-
-## 基准测试结果
-
-### 1. OmniDocBench
-
-以下是RapidDoc在 OmniDocBench 上的评估结果。
-
-Pipeline 模型使用 PP-DocLayoutV2、PP-OCRv5-mobile、PP-FormulaNet_plus-M、UNET_SLANET_PLUS。
-<table style="width:100%; border-collapse: collapse;">
-    <caption>Comprehensive evaluation of document parsing on OmniDocBench (v1.5)</caption>
-    <thead>
-        <tr>
-            <th>Model Type</th>
-            <th>Methods</th>
-            <th>Size</th>
-            <th>Overall&#x2191;</th>
-            <th>Text<sup>Edit</sup>&#x2193;</th>
-            <th>Formula<sup>CDM</sup>&#x2191;</th>
-            <th>Table<sup>TEDS</sup>&#x2191;</th>
-            <th>Table<sup>TEDS-S</sup>&#x2191;</th>
-            <th>Read Order<sup>Edit</sup>&#x2193;</th>
-        </tr>
-    </thead>
-    <tbody>
-        <tr>
-            <td rowspan="16"><strong>Specialized</strong><br><strong>VLMs</strong></td>
-            <td>PaddleOCR-VL</td>
-            <td>0.9B</td>
-            <td><strong>92.86</strong></td>
-            <td><strong>0.035</strong></td>
-            <td><strong>91.22</strong></td>
-            <td><strong>90.89</strong></td>
-            <td><strong>94.76</strong></td>
-            <td><strong>0.043</strong></td>
-        </tr>
-            <td>MinerU2.5</td>
-            <td>1.2B</td>
-            <td><ins>90.67</ins></td>
-            <td><ins>0.047</ins></td>
-            <td><ins>88.46</ins></td>
-            <td><ins>88.22</ins></td>
-            <td><ins>92.38</ins></td>
-            <td><ins>0.044</ins></td>
-        </tr>
-        <tr>
-            <td>MonkeyOCR-pro-3B</td>
-            <td>3B</td>
-            <td>88.85</td>
-            <td>0.075</td>
-            <td>87.25</td>
-            <td>86.78</td>
-            <td>90.63</td>
-            <td>0.128</td>
-        </tr>
-        <tr>
-            <td>OCRVerse</td>
-            <td>4B</td>
-            <td>88.56</td>
-            <td>0.058</td>
-            <td>86.91</td>
-            <td>84.55</td>
-            <td>88.45</td>
-            <td>0.071</td>
-        </tr>
-        <tr>
-            <td>dots.ocr</td>
-            <td>3B</td>
-            <td>88.41</td>
-            <td>0.048</td>
-            <td>83.22</td>
-            <td>86.78</td>
-            <td>90.62</td>
-            <td>0.053</td>
-        </tr>
-        <tr>
-            <td>MonkeyOCR-3B</td>
-            <td>3B</td>
-            <td>87.13</td>
-            <td>0.075</td>
-            <td>87.45</td>
-            <td>81.39</td>
-            <td>85.92</td>
-            <td>0.129</td>
-        </tr>
-        <tr>
-            <td>Deepseek-OCR</td>
-            <td>3B</td>
-            <td>87.01</td>
-            <td>0.073</td>
-            <td>83.37</td>
-            <td>84.97</td>
-            <td>88.80</td>
-            <td>0.086</td>
-        </tr>
-        <tr>
-            <td>MonkeyOCR-pro-1.2B</td>
-            <td>1.2B</td>
-            <td>86.96</td>
-            <td>0.084</td>
-            <td>85.02</td>
-            <td>84.24</td>
-            <td>89.02</td>
-            <td>0.130</td>
-        </tr>
-        <tr>
-            <td>Nanonets-OCR-s</td>
-            <td>3B</td>
-            <td>85.59</td>
-            <td>0.093</td>
-            <td>85.90</td>
-            <td>80.14</td>
-            <td>85.57</td>
-            <td>0.108</td>
-        </tr>
-        <tr>
-            <td>MinerU2-VLM</td>
-            <td>0.9B</td>
-            <td>85.56</td>
-            <td>0.078</td>
-            <td>80.95</td>
-            <td>83.54</td>
-            <td>87.66</td>
-            <td>0.086</td>
-        </tr>
-        <tr>
-            <td>olmOCR</td>
-            <td>7B</td>
-            <td>81.79</td>
-            <td>0.096</td>
-            <td>86.04</td>
-            <td>68.92</td>
-            <td>74.77</td>
-            <td>0.121</td>
-        </tr>
-        <tr>
-            <td>Dolphin-1.5</td>
-            <td>0.3B</td>
-            <td>83.21</td>
-            <td>0.092</td>
-            <td>80.78</td>
-            <td>78.06</td>
-            <td>84.10</td>
-            <td>0.080</td>
-        </tr>
-        <tr>
-            <td>POINTS-Reader</td>
-            <td>3B</td>
-            <td>80.98</td>
-            <td>0.134</td>
-            <td>79.20</td>
-            <td>77.13</td>
-            <td>81.66</td>
-            <td>0.145</td>
-        </tr>
-        <tr>
-            <td>Mistral OCR</td>
-            <td>-</td>
-            <td>78.83</td>
-            <td>0.164</td>
-            <td>82.84</td>
-            <td>70.03</td>
-            <td>78.04</td>
-            <td>0.144</td>
-        </tr>
-        <tr>
-            <td>OCRFlux</td>
-            <td>3B</td>
-            <td>74.82</td>
-            <td>0.193</td>
-            <td>68.03</td>
-            <td>75.75</td>
-            <td>80.23</td>
-            <td>0.202</td>
-        </tr>
-        <tr>
-            <td>Dolphin</td>
-            <td>0.3B</td>
-            <td>74.67</td>
-            <td>0.125</td>
-            <td>67.85</td>
-            <td>68.70</td>
-            <td>77.77</td>
-            <td>0.124</td>
-        </tr>
-        <tr>
-            <td rowspan="6"><strong>General</strong><br><strong>VLMs</strong></td>
-            <td>Qwen3-VL-235B-A22B-Instruct</td>
-            <td>235B</td>
-            <td>89.15</td>
-            <td>0.069</td>
-            <td>88.14</td>
-            <td>86.21</td>
-            <td>90.55</td>
-            <td>0.068</td>
-        </tr>
-            <td>Gemini-2.5 Pro</td>
-            <td>-</td>
-            <td>88.03</td>
-            <td>0.075</td>
-            <td>85.82</td>
-            <td>85.71</td>
-            <td>90.29</td>
-            <td>0.097</td>
-        </tr>
-        <tr>
-            <td>Qwen2.5-VL</td>
-            <td>72B</td>
-            <td>87.02</td>
-            <td>0.094</td>
-            <td>88.27</td>
-            <td>82.15</td>
-            <td>86.22</td>
-            <td>0.102</td>
-        </tr>
-        <tr>
-            <td>InternVL3.5</td>
-            <td>241B</td>
-            <td>82.67</td>
-            <td>0.142</td>
-            <td>87.23</td>
-            <td>75.00</td>
-            <td>81.28</td>
-            <td>0.125</td>
-        </tr>
-        <tr>
-            <td>InternVL3</td>
-            <td>78B</td>
-            <td>80.33</td>
-            <td>0.131</td>
-            <td>83.42</td>
-            <td>70.64</td>
-            <td>77.74</td>
-            <td>0.113</td>
-        </tr>
-        <tr>
-            <td>GPT-4o</td>
-            <td>-</td>
-            <td>75.02</td>
-            <td>0.217</td>
-            <td>79.70</td>
-            <td>67.07</td>
-            <td>76.09</td>
-            <td>0.148</td>
-        </tr>
-        <tr>
-            <td rowspan="4"><strong>Pipeline</strong><br><strong>Tools</strong></td>
-            <td><strong>RapidDoc</strong></td>
-            <td>-</td>
-            <td>87.81</td>
-            <td>0.065</td>
-            <td>89.348</td>
-            <td>80.59</td>
-            <td>87.90</td>
-            <td>0.053</td>
-        </tr>
-        <tr>
-            <td>PP-StructureV3</td>
-            <td>-</td>
-            <td>86.73</td>
-            <td>0.073</td>
-            <td>85.79</td>
-            <td>81.68</td>
-            <td>89.48</td>
-            <td>0.073</td>
-        </tr>
-        <tr>
-            <td>Mineru2-pipeline</td>
-            <td>-</td>
-            <td>75.51</td>
-            <td>0.209</td>
-            <td>76.55</td>
-            <td>70.90</td>
-            <td>79.11</td>
-            <td>0.225</td>
-        </tr>
-        <tr>
-            <td>Marker-1.8.2</td>
-            <td>-</td>
-            <td>71.30</td>
-            <td>0.206</td>
-            <td>76.66</td>
-            <td>57.88</td>
-            <td>71.17</td>
-            <td>0.250</td>
-        </tr>
-    </tbody>
-</table>
-
-## 🛠️ 安装RapidDoc
-
-#### 使用pip安装
-```bash
-pip install rapid-doc[cpu] -i https://mirrors.aliyun.com/pypi/simple
-或
-pip install rapid-doc[gpu] -i https://mirrors.aliyun.com/pypi/simple
+```powershell
+cd RapidDoc-main
 ```
 
-#### 通过源码安装
-```bash
-# 克隆仓库
-git clone https://github.com/RapidAI/RapidDoc.git
-cd RapidDoc
+推荐 CPU 安装：
 
-# 安装依赖
-pip install -e .[cpu] -i https://mirrors.aliyun.com/pypi/simple
-或
-pip install -e .[gpu] -i https://mirrors.aliyun.com/pypi/simple
-```
-#### 使用gpu推理
-```python
-# rapid-doc[gpu] 默认安装 onnxruntime-gpu 最新版
-# 需要确定onnxruntime-gpu与GPU对应，参考 https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html#requirements
-
-# 在 Python 中指定 GPU（必须在导入 rapid_doc 之前设置）
-import os
-# 使用默认 GPU（cuda:0）
-os.environ['MINERU_DEVICE_MODE'] = "cuda"
-# 或指定 GPU 编号，例如使用第二块 GPU（cuda:1）
-os.environ['MINERU_DEVICE_MODE'] = "cuda:1"
-```
-#### 使用PaddleOCRVL系列推理
-vl模型的部署，参考[官方文档](https://www.paddleocr.ai/main/version3.x/pipeline_usage/PaddleOCR-VL.html#31-vlm) 
-```python
-import os
-os.environ['PADDLEOCRVL_VERSION'] = "v1.5"
-os.environ['PADDLEOCRVL_VL_REC_BACKEND'] = "vllm-server"
-os.environ['PADDLEOCRVL_VL_VL_REC_SERVER_URL'] = "http://localhost:8118/v1"
-
-from rapid_doc.model.layout.rapid_layout_self import ModelType as LayoutModelType
-from rapid_doc.model.custom.paddleocr_vl.paddleocr_vl import PaddleOCRVLTableModel, PaddleOCRVLOCRModel, PaddleOCRVLFormulaModel
-layout_config = {
-    "model_type": LayoutModelType.PP_DOCLAYOUTV3,
-}
-ocr_config = {
-    "custom_model": PaddleOCRVLOCRModel()
-}
-formula_config = {
-    "custom_model": PaddleOCRVLFormulaModel()
-}
-table_config = {
-    "custom_model": PaddleOCRVLTableModel()
-}
+```powershell
+python -m pip install -e ".[cpu,ui]"
 ```
 
-#### 使用docker部署RapidDoc
-RapidDoc提供了便捷的docker部署方式，这有助于快速搭建环境并解决一些棘手的环境兼容问题。
+如果不使用 editable 安装，也可以安装 PyPI 版 RapidDoc 和 UI 依赖：
 
-您可以在文档中获取 [Docker部署说明](docker/README.md)，镜像已推送至 [Docker Hub](https://hub.docker.com/r/hzkitty/rapid-doc)。
-
----
-### 📋 使用
-
-```python
-import os
-from pathlib import Path
-from rapid_doc import RapidDoc
-__dir__ = Path(__file__).resolve().parent.parent
-output_dir = os.path.join(__dir__, "output")
-
-doc_path_list = [
-    __dir__ / "demo/pdfs/示例1-论文模板.pdf",
-    __dir__ / "demo/docx/test.docx",
-]
-engine = RapidDoc()
-outputs = engine(doc_path_list, output_dir=output_dir)
-for output in outputs:
-    print(output.markdown)
+```powershell
+python -m pip install "rapid-doc[cpu]"
+python -m pip install fastapi "uvicorn[standard]" python-multipart markdown-it-py mdit-py-plugins pygments pypandoc-binary
 ```
----
 
-## 在线体验
+NVIDIA GPU 安装：
 
-### 基于Gradio的在线demo
-基于gradio开发的webui，界面简洁，仅包含核心解析功能，免登录
+```powershell
+python -m pip install -e ".[gpu,ui]"
+```
 
-- [![ModelScope](https://img.shields.io/badge/Demo_on_ModelScope-purple?logo=data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjIzIiBoZWlnaHQ9IjIwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KCiA8Zz4KICA8dGl0bGU+TGF5ZXIgMTwvdGl0bGU+CiAgPHBhdGggaWQ9InN2Z18xNCIgZmlsbD0iIzYyNGFmZiIgZD0ibTAsODkuODRsMjUuNjUsMGwwLDI1LjY0OTk5bC0yNS42NSwwbDAsLTI1LjY0OTk5eiIvPgogIDxwYXRoIGlkPSJzdmdfMTUiIGZpbGw9IiM2MjRhZmYiIGQ9Im05OS4xNCwxMTUuNDlsMjUuNjUsMGwwLDI1LjY1bC0yNS42NSwwbDAsLTI1LjY1eiIvPgogIDxwYXRoIGlkPSJzdmdfMTYiIGZpbGw9IiM2MjRhZmYiIGQ9Im0xNzYuMDksMTQxLjE0bC0yNS42NDk5OSwwbDAsMjIuMTlsNDcuODQsMGwwLC00Ny44NGwtMjIuMTksMGwwLDI1LjY1eiIvPgogIDxwYXRoIGlkPSJzdmdfMTciIGZpbGw9IiMzNmNmZDEiIGQ9Im0xMjQuNzksODkuODRsMjUuNjUsMGwwLDI1LjY0OTk5bC0yNS42NSwwbDAsLTI1LjY0OTk5eiIvPgogIDxwYXRoIGlkPSJzdmdfMTgiIGZpbGw9IiMzNmNmZDEiIGQ9Im0wLDY0LjE5bDI1LjY1LDBsMCwyNS42NWwtMjUuNjUsMGwwLC0yNS42NXoiLz4KICA8cGF0aCBpZD0ic3ZnXzE5IiBmaWxsPSIjNjI0YWZmIiBkPSJtMTk4LjI4LDg5Ljg0bDI1LjY0OTk5LDBsMCwyNS42NDk5OWwtMjUuNjQ5OTksMGwwLC0yNS42NDk5OXoiLz4KICA8cGF0aCBpZD0ic3ZnXzIwIiBmaWxsPSIjMzZjZmQxIiBkPSJtMTk4LjI4LDY0LjE5bDI1LjY0OTk5LDBsMCwyNS42NWwtMjUuNjQ5OTksMGwwLC0yNS42NXoiLz4KICA8cGF0aCBpZD0ic3ZnXzIxIiBmaWxsPSIjNjI0YWZmIiBkPSJtMTUwLjQ0LDQybDAsMjIuMTlsMjUuNjQ5OTksMGwwLDI1LjY1bDIyLjE5LDBsMCwtNDcuODRsLTQ3Ljg0LDB6Ii8+CiAgPHBhdGggaWQ9InN2Z18yMiIgZmlsbD0iIzM2Y2ZkMSIgZD0ibTczLjQ5LDg5Ljg0bDI1LjY1LDBsMCwyNS42NDk5OWwtMjUuNjUsMGwwLC0yNS42NDk5OXoiLz4KICA8cGF0aCBpZD0ic3ZnXzIzIiBmaWxsPSIjNjI0YWZmIiBkPSJtNDcuODQsNjQuMTlsMjUuNjUsMGwwLC0yMi4xOWwtNDcuODQsMGwwLDQ3Ljg0bDIyLjE5LDBsMCwtMjUuNjV6Ii8+CiAgPHBhdGggaWQ9InN2Z18yNCIgZmlsbD0iIzYyNGFmZiIgZD0ibTQ3Ljg0LDExNS40OWwtMjIuMTksMGwwLDQ3Ljg0bDQ3Ljg0LDBsMCwtMjIuMTlsLTI1LjY1LDBsMCwtMjUuNjV6Ii8+CiA8L2c+Cjwvc3ZnPg==&labelColor=white)](https://www.modelscope.cn/studios/RapidAI/RapidDoc)
+GPU 依赖必须与本机 CUDA、cuDNN、驱动版本匹配。如果 GPU 模式不可用，请先使用 CPU 模式确认主流程正常。
 
----
+## 启动
 
-## 📋 使用示例
+```powershell
+python -m uvicorn rapid_doc_ui.app:app --host 127.0.0.1 --port 7862
+```
 
-- [代码示例](./demo/demo.py)
+也可以直接运行脚本：
 
-- [参数介绍](./docs/analyze_param.md)
+```powershell
+.\start_ui.ps1
+```
 
-- [FastAPI 示例](./docker/README_API.md)
----
+浏览器打开：
 
-## 模型下载
-不指定模型路径，初次运行时，会自动下载
-- [RapidDoc 模型集（版面/公式/表格）](https://www.modelscope.cn/models/RapidAI/RapidDoc)  
-- [RapidOCR 模型](https://www.modelscope.cn/models/RapidAI/RapidOCR)  
-- [部分表格模型RapidTable](https://www.modelscope.cn/models/RapidAI/RapidTable) 
+```text
+http://127.0.0.1:7862
+```
 
----
+## 使用
 
-## 📌 TODO
+1. 上传 PDF、图片或 Office 文件。
+2. 选择解析模式、语言和设备模式。
+3. 选择要导出的格式。
+4. 如需使用第三方 API，勾选“第三方 API”并填写 Base URL、模型名和 API Key。
+5. 点击“开始转换”。
 
-- [x] 跨页表格合并
-- [x] 复选框识别，使用opencv（默认关闭、opencv识别存在误检）
-- [x] 提供 fastapi，支持cpu和gpu版本的docker镜像构建
-- [x] 文本型pdf，表格非OCR文本提取
-- [x] 文本型pdf，使用pypdfium2提取文本框bbox
-- [x] 文本型pdf，支持0/90/270度三个方向的表格解析
-- [x] 文本型pdf，使用pypdfium2提取原始图片（默认截图会导致清晰度降低和图片边界可能丢失部分）
-- [x] 表格内公式提取，表格内图片提取
-- [x] 优化阅读顺序，支持多栏、竖排等复杂版面恢复
-- [x] 公式支持torch推理，可用GPU加速
-- [x] 版面、表格模型支持openvino
-- [x] markdown转docx、html
-- [x] 支持 PP-DocLayoutV2 版面识别+阅读顺序
-- [x] OmniDocBench评测
-- [x] 支持自定义的ocr、table、公式。支持PaddleOCR-VL系列
-- [x] 支持docx/doc、pptx/ppt、xlsx/xls的原生解析（不使用模型）
-- [x] 支持印章文本检测
-- [x] 文档方向90°、270°矫正（默认关闭），表格方向90°、270°矫正（默认开启）
+转换结果会写入：
 
-## 🙏 致谢
+```text
+RapidDoc-main/ui_output/
+```
 
-- [MinerU](https://github.com/opendatalab/MinerU)
-- [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR)
-- [RapidOCR](https://github.com/RapidAI/RapidOCR)
+每个任务会生成独立目录和 ZIP 包，通常包含：
 
-## Star History
+- `.md`
+- `_middle.json`
+- `_content.json`
+- `.html`
+- `.docx`，如果勾选 Word
+- 图片资源
+- `metadata.json`
 
-<a href="https://www.star-history.com/?repos=RapidAI%2FRapidDoc&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/image?repos=RapidAI/RapidDoc&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/image?repos=RapidAI/RapidDoc&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/image?repos=RapidAI/RapidDoc&type=date&legend=top-left" />
- </picture>
-</a>
+## 设备模式
 
-## ⚖️ 开源许可
+界面中的“设备模式”可以选择：
 
-基于 [MinerU](https://github.com/opendatalab/MinerU) 改造而来，已**移除原项目中的 YOLO 模型**，并替换为 **PP-StructureV3 系列 ONNX 模型**。  
-由于已移除 AGPL 授权的 YOLO 模型部分，本项目整体不再受 AGPL 约束。
+- `CPU / OpenVINO`
+- `GPU / CUDA`
+- `GPU / CUDA:0`
+- `GPU / CUDA:1`
 
-该项目采用 [Apache 2.0 license](LICENSE) 开源许可证。
+CPU 模式最稳定。GPU 模式使用 RapidDoc 的 `MINERU_DEVICE_MODE=cuda` 路线，主要面向 NVIDIA 显卡。
+
+### CUDA 兼容模式
+
+部分老架构 NVIDIA 显卡，例如 V100，可能在版面模型的 ONNXRuntime CUDA 推理中报错：
+
+```text
+cudaErrorNoKernelImageForDevice:no kernel image is available for execution on the device
+```
+
+遇到这种情况可以勾选“CUDA 兼容模式”。该模式会让版面模型使用 CPU/OpenVINO，避开不兼容的 ONNX CUDA kernel，其他模型仍尽量按 CUDA 配置运行。
+
+## 第三方 API
+
+第三方 API 使用 OpenAI-compatible Chat Completions 格式。默认兼容硅基流动：
+
+- Base URL：`https://api.siliconflow.cn/v1`
+- 默认模型：`Qwen/Qwen3-VL-32B-Instruct`
+- 鉴权：`Authorization: Bearer <API Key>`
+
+第三方 API 可选择用于：
+
+- OCR
+- 公式
+- 表格
+
+建议先用本地 CPU 模式完成主要识别，再按需开启第三方 API。通用 VLM 更适合局部增强，不适合作为稳定的整页排版引擎。
+
+## API Key 自动导入和轮换
+
+可以在项目根目录放置 `apikey.txt`，每一行填写一个 API Key。程序启动后会自动读取以下位置：
+
+```text
+../apikey.txt
+RapidDoc-main/apikey.txt
+```
+
+界面会显示“已加载 Key”下拉菜单，可手动选择从哪个 key 开始调用。转换过程中如果第三方 API 返回错误码，程序会自动切换到下一个 key，并重试刚才失败的图块。
+
+如果没有找到 `apikey.txt`，可以在界面 API Key 输入框右侧点击钥匙按钮选择一个本地 `.txt` 文件。也可以不使用文件，直接在输入框中填写单个 API Key。
+
+不要把 `apikey.txt` 提交到 GitHub。项目 `.gitignore` 已默认排除该文件。
+
+## 诊断接口
+
+服务启动后可以打开：
+
+```text
+http://127.0.0.1:7862/api/device-diagnostics
+```
+
+重点检查：
+
+- `onnxruntime.has_cuda_provider`
+- `torch.cuda_available`
+- `nvidia_smi.available`
+
+这些字段可以帮助判断 GPU 环境是否正确安装。
+
+## 常见问题
+
+### Word 导出失败
+
+请确认安装：
+
+```powershell
+python -m pip install pypandoc-binary python-docx
+```
+
+### GPU 不工作
+
+请确认：
+
+- 使用 NVIDIA 显卡
+- CUDA/cuDNN 与 `onnxruntime-gpu` 匹配
+- 已安装 `rapid-doc[gpu]`
+- 已安装支持 CUDA 的 `torch` / `torchvision`
+- `api/device-diagnostics` 中 CUDA 相关字段正常
+
+### V100 报 cudaErrorNoKernelImageForDevice
+
+勾选“CUDA 兼容模式”。如果仍失败，请尝试更换 `onnxruntime-gpu` 版本，或直接使用 CPU 模式。
+
+### architecture pp-ocrv4_mobile_seal_det is not in arch_config.yaml
+
+这是印章 OCR 模型在当前 RapidOCR / torch 配置里找不到对应 architecture。UI 已将“印章”识别默认关闭。普通 PDF 转 Markdown/JSON/HTML/Word 不需要启用它。
+
+### 第三方 API 报图片尺寸错误
+
+当前 UI 会自动放大并补白过小的裁剪图块。如果仍报错，请确认使用的是最新代码，并重启服务。
+
+### UTF-8 surrogate 编码错误
+
+当前 UI 会在写入 Markdown、JSON、HTML 预览前清理非法 surrogate 字符，避免因单个坏字符导致转换中断。
+
+## 项目结构
+
+```text
+rapid_doc_ui/
+  app.py              # FastAPI 后端、任务队列、导出逻辑
+  third_party.py      # 第三方 VLM API 适配器和 key 轮换
+  postprocess.py      # Markdown 版面后处理
+  static/             # Web UI
+README.md
+README_UI_DEPLOY.md
+requirements-ui-cpu.txt
+requirements-ui-gpu.txt
+start_ui.ps1
+start_ui.bat
+```
+
+## 说明
+
+本项目基于 RapidDoc / RapidOCR 生态构建。RapidDoc 原始项目请参考上游仓库文档。当前仓库重点维护本地 OCR Web UI、第三方 API 集成和部署体验。

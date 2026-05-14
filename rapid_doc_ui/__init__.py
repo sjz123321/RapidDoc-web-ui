@@ -1,0 +1,2 @@
+"""RapidDoc local UI package."""
+

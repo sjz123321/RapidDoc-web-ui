@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RapidDoc OCR UI</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+  </head>
+  <body>
+    <main class="shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">R</div>
+          <div>
+            <h1>RapidDoc OCR</h1>
+            <p>PDF 转 Markdown / JSON / Word / HTML</p>
+          </div>
+        </div>
+
+        <form id="convert-form" class="panel">
+          <label class="upload-box" for="file-input">
+            <input id="file-input" name="file" type="file" accept=".pdf,image/*,.doc,.docx,.ppt,.pptx,.xls,.xlsx" />
+            <i data-lucide="file-up"></i>
+            <span id="file-name">选择文件</span>
+          </label>
+
+          <label class="check-row">
+            <input id="use-sample" type="checkbox" />
+            <span>使用当前目录 test.pdf</span>
+          </label>
+
+          <div class="field-grid">
+            <label>
+              <span>解析模式</span>
+              <select id="parse-method" name="parse_method">
+                <option value="auto">Auto</option>
+                <option value="ocr">OCR</option>
+                <option value="txt">Txt</option>
+              </select>
+            </label>
+            <label>
+              <span>语言</span>
+              <select id="lang" name="lang">
+                <option value="ch">中文</option>
+                <option value="en">English</option>
+                <option value="japan">日本語</option>
+                <option value="korean">한국어</option>
+              </select>
+            </label>
+          </div>
+
+          <label>
+            <span>设备模式</span>
+            <select id="device-mode" name="device_mode">
+              <option value="cpu">CPU / OpenVINO</option>
+              <option value="cuda">GPU / CUDA</option>
+              <option value="cuda:0">GPU / CUDA:0</option>
+              <option value="cuda:1">GPU / CUDA:1</option>
+            </select>
+          </label>
+
+          <label class="check-row">
+            <input id="layout-cpu-fallback" type="checkbox" />
+            <span>CUDA 兼容模式</span>
+          </label>
+
+          <div class="field-grid">
+            <label>
+              <span>起始页</span>
+              <input id="start-page" type="number" min="0" value="0" />
+            </label>
+            <label>
+              <span>结束页</span>
+              <input id="end-page" type="number" min="0" placeholder="全部" />
+            </label>
+          </div>
+
+          <div class="toggle-grid">
+            <label class="check-row"><input id="formula-enable" type="checkbox" checked /><span>公式</span></label>
+            <label class="check-row"><input id="table-enable" type="checkbox" checked /><span>表格</span></label>
+            <label class="check-row"><input id="seal-enable" type="checkbox" /><span>印章</span></label>
+            <label class="check-row"><input id="layout-cleanup" type="checkbox" checked /><span>版面整理</span></label>
+          </div>
+
+          <section class="format-box">
+            <div class="section-title">输出格式</div>
+            <div class="toggle-grid">
+              <label class="check-row"><input id="export-md" type="checkbox" checked /><span>MD</span></label>
+              <label class="check-row"><input id="export-middle" type="checkbox" checked /><span>Middle JSON</span></label>
+              <label class="check-row"><input id="export-content" type="checkbox" checked /><span>Content JSON</span></label>
+              <label class="check-row"><input id="export-html" type="checkbox" checked /><span>HTML</span></label>
+              <label class="check-row"><input id="export-docx" type="checkbox" /><span>Word</span></label>
+            </div>
+          </section>
+
+          <section class="api-box">
+            <label class="check-row api-enable">
+              <input id="third-party-enabled" type="checkbox" />
+              <span>第三方 API</span>
+            </label>
+            <div id="api-fields" class="api-fields" aria-disabled="true">
+              <label>
+                <span>Base URL</span>
+                <input id="third-party-base-url" type="url" placeholder="https://api.siliconflow.cn/v1" />
+              </label>
+              <label>
+                <span>Model</span>
+                <input id="third-party-model" type="text" placeholder="Qwen/Qwen3-VL-32B-Instruct" />
+              </label>
+              <label>
+                <span>API Key</span>
+                <div class="api-key-row">
+                  <input id="third-party-api-key" type="password" placeholder="也可以直接输入 API Key" />
+                  <label class="file-button" title="选择 apikey.txt">
+                    <i data-lucide="key-round"></i>
+                    <input id="third-party-api-key-file" type="file" accept=".txt" />
+                  </label>
+                </div>
+              </label>
+              <label>
+                <span>已加载 Key</span>
+                <select id="third-party-api-key-choice">
+                  <option value="">手动输入 / 不使用文件 Key</option>
+                </select>
+                <small id="api-key-source" class="hint-text">正在读取 apikey.txt</small>
+              </label>
+              <div class="toggle-grid compact">
+                <label class="check-row"><input id="third-party-use-ocr" type="checkbox" checked /><span>OCR</span></label>
+                <label class="check-row"><input id="third-party-use-formula" type="checkbox" /><span>公式</span></label>
+                <label class="check-row"><input id="third-party-use-table" type="checkbox" /><span>表格</span></label>
+              </div>
+            </div>
+          </section>
+
+          <button id="convert-button" class="primary-button" type="submit">
+            <i data-lucide="play"></i>
+            <span>开始转换</span>
+          </button>
+        </form>
+      </aside>
+
+      <section class="workspace">
+        <header class="topbar">
+          <div>
+            <h2 id="result-title">等待转换</h2>
+            <p id="status-line">本地 CPU 模式</p>
+          </div>
+          <div class="actions">
+            <a id="download-link" class="icon-button disabled" href="#" download title="下载结果包">
+              <i data-lucide="archive"></i>
+            </a>
+            <button id="clear-button" class="icon-button" type="button" title="清空结果">
+              <i data-lucide="trash-2"></i>
+            </button>
+          </div>
+        </header>
+
+        <section class="progress-wrap" aria-live="polite">
+          <div class="progress-meta">
+            <span id="progress-message">尚未开始</span>
+            <span id="progress-percent">0%</span>
+          </div>
+          <div class="progress-track">
+            <div id="progress-bar" class="progress-bar"></div>
+          </div>
+        </section>
+
+        <nav class="tabs" aria-label="预览">
+          <button class="tab active" data-tab="markdown">Markdown</button>
+          <button class="tab" data-tab="html">HTML</button>
+          <button class="tab" data-tab="files">文件</button>
+        </nav>
+
+        <div class="preview-frame">
+          <pre id="markdown-preview" class="preview active"></pre>
+          <iframe id="html-preview" class="preview html-preview" title="HTML preview"></iframe>
+          <div id="files-preview" class="preview files-preview"></div>
+        </div>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
