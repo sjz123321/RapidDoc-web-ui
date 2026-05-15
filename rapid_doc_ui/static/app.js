@@ -113,6 +113,7 @@ function renderFiles(data) {
     ["Middle JSON", data.middle_json_path],
     ["Content JSON", data.content_json_path],
     ["Word", data.docx_path],
+    ["Log", data.log_path],
     ["ZIP", data.zip_path],
   ].filter(([, path]) => path);
 
@@ -123,7 +124,11 @@ function renderFiles(data) {
   const rows = files
     .map(([label, path]) => {
       const name = path.split(/[\\/]/).pop();
-      const href = label === "ZIP" ? `/api/download/${data.job_id}` : `/api/file/${data.job_id}/${encodeURIComponent(name)}`;
+      const href = label === "ZIP"
+        ? `/api/download/${data.job_id}`
+        : label === "Log"
+          ? `/api/log/${data.job_id}`
+          : `/api/file/${data.job_id}/${encodeURIComponent(name)}`;
       return `
         <div class="file-row">
           <div>
@@ -244,6 +249,8 @@ form.addEventListener("submit", async (event) => {
   formData.append("lang", inputValue("#lang"));
   formData.append("device_mode", inputValue("#device-mode"));
   formData.append("layout_cpu_fallback", boolValue("#layout-cpu-fallback"));
+  formData.append("heterogeneous_parallel", boolValue("#heterogeneous-parallel"));
+  formData.append("debug_log_enabled", boolValue("#debug-log-enabled"));
   formData.append("start_page", inputValue("#start-page") || "0");
   if (inputValue("#end-page")) {
     formData.append("end_page", inputValue("#end-page"));

@@ -4,6 +4,7 @@
 """
 import os
 import inspect
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Tuple, Dict, Optional
 
 import cv2
@@ -60,6 +61,7 @@ class BatchAnalyze:
         self.use_det_mode = self.ocr_config.get("use_det_mode", "auto")
         self.ocr_det_base_batch_size = self.ocr_config.get("Det.rec_batch_num", 1)
         self.seal_enable = self.ocr_config.get("seal_enable", True)
+        self.heterogeneous_parallel = self.ocr_config.get("heterogeneous_parallel", False)
         self.use_custom_ocr = False
         
         # 版面配置
@@ -129,14 +131,19 @@ class BatchAnalyze:
         ocr_res_all_page, table_res_all_page, formula_res_all_page = self._collect_detection_regions(
             images_layout_res, np_images, images_with_extra_info
         )
-        # 3. 公式识别
-        if self.formula_enable:
-            self._run_formula_recognition(formula_res_all_page)
-        # 4. OCR 识别 (根据模式选择不同的处理方式)
-        if isinstance(self.model.ocr_model, CustomBaseModel):
-            self._run_custom_ocr(ocr_res_all_page)
+        # 3-4. 公式识别与 OCR 识别
+        if self._should_run_heterogeneous_parallel(formula_res_all_page):
+            self._run_formula_and_ocr_parallel(
+                atom_model_manager,
+                formula_res_all_page,
+                ocr_res_all_page,
+                pdf_dict_list,
+                scale_list,
+            )
         else:
-            self._run_traditional_ocr(
+            if self.formula_enable:
+                self._run_formula_recognition(formula_res_all_page)
+            self._run_ocr_recognition(
                 atom_model_manager, ocr_res_all_page, pdf_dict_list, scale_list
             )
         # 5. 表格识别
@@ -161,6 +168,54 @@ class BatchAnalyze:
 
         clean_vram(self.model.device, vram_threshold=8)
         return images_layout_res
+
+    def _should_run_heterogeneous_parallel(self, formula_res_all_page: List[Dict]) -> bool:
+        """是否启用 OCR + 公式异构并行。"""
+        return bool(
+            self.heterogeneous_parallel
+            and self.formula_enable
+            and formula_res_all_page
+        )
+
+    def _run_ocr_recognition(
+        self,
+        atom_model_manager,
+        ocr_res_all_page: List[Dict],
+        pdf_dict_list: List[Dict],
+        scale_list: List[float],
+    ) -> None:
+        """执行 OCR 识别，根据模型类型选择传统 OCR 或自定义 OCR。"""
+        if isinstance(self.model.ocr_model, CustomBaseModel):
+            self._run_custom_ocr(ocr_res_all_page)
+        else:
+            self._run_traditional_ocr(
+                atom_model_manager, ocr_res_all_page, pdf_dict_list, scale_list
+            )
+
+    def _run_formula_and_ocr_parallel(
+        self,
+        atom_model_manager,
+        formula_res_all_page: List[Dict],
+        ocr_res_all_page: List[Dict],
+        pdf_dict_list: List[Dict],
+        scale_list: List[float],
+    ) -> None:
+        """并行执行公式识别和 OCR 识别。
+
+        layout 是共同前置依赖；table 又依赖公式结果，因此只并行 formula 与 OCR。
+        """
+        logger.info("Heterogeneous parallel enabled: running formula and OCR concurrently")
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="rapid-doc-hetero") as executor:
+            formula_future = executor.submit(self._run_formula_recognition, formula_res_all_page)
+            ocr_future = executor.submit(
+                self._run_ocr_recognition,
+                atom_model_manager,
+                ocr_res_all_page,
+                pdf_dict_list,
+                scale_list,
+            )
+            formula_future.result()
+            ocr_future.result()
     
     def _run_layout_detection(
         self,

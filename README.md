@@ -10,7 +10,10 @@
 - Markdown、Middle JSON、Content JSON、HTML、Word、ZIP 输出
 - 本地 CPU / OpenVINO 模式
 - NVIDIA CUDA GPU 模式
+- AMD / DirectML 实验模式
 - V100 等老架构显卡可用的 CUDA 兼容模式
+- OCR + 公式异构并行加速实验模式
+- 可选调试日志输出到 `ui_logs/`
 - 第三方 OpenAI-compatible VLM API 接入
 - 硅基流动 API 默认配置
 - `apikey.txt` 自动导入和 API Key 失败轮换
@@ -26,7 +29,7 @@
 - CPU 模式推荐，兼容性最好
 - GPU 模式需要 NVIDIA CUDA 环境
 
-AMD 显卡不建议使用 CUDA GPU 模式。本项目没有内置 DirectML 实验模式。
+AMD 显卡不能使用 CUDA 模式；如需尝试 AMD GPU，可使用 DirectML 实验模式。
 
 ## 安装
 
@@ -56,6 +59,17 @@ python -m pip install -e ".[gpu,ui]"
 ```
 
 GPU 依赖必须与本机 CUDA、cuDNN、驱动版本匹配。如果 GPU 模式不可用，请先使用 CPU 模式确认主流程正常。
+
+AMD / DirectML 实验模式建议使用独立环境，避免 `onnxruntime`、`onnxruntime-gpu`、`onnxruntime-directml` 混装：
+
+```powershell
+python -m pip uninstall -y onnxruntime onnxruntime-gpu onnxruntime-directml
+python -m pip install -e ".[directml,ui]"
+python -m pip uninstall -y onnxruntime onnxruntime-gpu
+python -m pip install --force-reinstall "onnxruntime-directml>=1.18.0,<1.24.0"
+```
+
+DirectML 模式目前是混合推理：OCR 仍使用 CPU/OpenVINO，版面、公式、表格等 ONNXRuntime 模型会尝试使用 `DmlExecutionProvider`。
 
 ## 启动
 
@@ -107,8 +121,36 @@ RapidDoc-main/ui_output/
 - `GPU / CUDA`
 - `GPU / CUDA:0`
 - `GPU / CUDA:1`
+- `AMD / DirectML（实验）`
 
 CPU 模式最稳定。GPU 模式使用 RapidDoc 的 `MINERU_DEVICE_MODE=cuda` 路线，主要面向 NVIDIA 显卡。
+
+DirectML 模式主要面向 Windows + AMD 显卡。它不是完整 GPU 化：OCR 保持 CPU/OpenVINO，以避免 RapidOCR 在非 CUDA 设备上进入不稳定路径。
+
+### 异构并行加速
+
+可以勾选“异构并行加速”尝试让 OCR 与公式识别并行运行：
+
+```text
+layout 版面分析
+-> OCR 和 formula 并行
+-> table 表格识别
+-> 结果合并
+```
+
+这个模式适合 CUDA、CUDA 兼容模式、DirectML 这类 CPU/GPU 混合场景。CPU 单独模式下不一定更快，因为 OCR 和公式会争抢同一组 CPU 资源。
+
+表格识别目前仍在 OCR 和公式完成后执行，因为表格处理可能需要公式区域结果。
+
+### 调试日志
+
+勾选“输出调试日志”后，每个任务会在项目目录生成：
+
+```text
+RapidDoc-main/ui_logs/<job_id>.log
+```
+
+日志会记录任务参数、进度、RapidDoc / RapidOCR / ONNXRuntime 输出和异常信息。API Key 会在任务参数中脱敏。转换完成后可在“文件”页下载 Log。
 
 ### CUDA 兼容模式
 
@@ -162,6 +204,7 @@ http://127.0.0.1:7862/api/device-diagnostics
 重点检查：
 
 - `onnxruntime.has_cuda_provider`
+- `onnxruntime.has_directml_provider`
 - `torch.cuda_available`
 - `nvidia_smi.available`
 
@@ -186,6 +229,21 @@ python -m pip install pypandoc-binary python-docx
 - 已安装 `rapid-doc[gpu]`
 - 已安装支持 CUDA 的 `torch` / `torchvision`
 - `api/device-diagnostics` 中 CUDA 相关字段正常
+
+### AMD / DirectML 不工作
+
+请确认：
+
+- Windows 系统已正确安装 AMD 显卡驱动
+- 当前 Python 环境安装的是 `onnxruntime-directml`
+- 如果曾安装 CPU/GPU 版 ONNXRuntime，最后重新执行过 `pip install --force-reinstall onnxruntime-directml`
+- `api/device-diagnostics` 中 `onnxruntime.has_directml_provider` 为 `true`
+
+DirectML 是实验模式。如果模型或算子不被 DirectML 支持，ONNXRuntime 可能回退到 CPU，或在部分模型上报错。遇到这种情况请使用 CPU 模式。
+
+### 异构并行加速不明显
+
+请确认文档里确实有公式区域。当前实验模式主要并行 OCR 与公式识别；如果文档几乎没有公式，或者当前模式下公式模型也在 CPU 上运行，加速效果会很有限。
 
 ### V100 报 cudaErrorNoKernelImageForDevice
 

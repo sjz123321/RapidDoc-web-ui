@@ -29,6 +29,7 @@ source.dev.env
 
 # RapidDoc UI runtime output
 ui_output/
+ui_logs/
 output*/
 tmp/
 temp/

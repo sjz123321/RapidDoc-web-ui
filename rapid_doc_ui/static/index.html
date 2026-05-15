@@ -57,12 +57,23 @@
               <option value="cuda">GPU / CUDA</option>
               <option value="cuda:0">GPU / CUDA:0</option>
               <option value="cuda:1">GPU / CUDA:1</option>
+              <option value="directml">AMD / DirectML（实验）</option>
             </select>
           </label>
 
           <label class="check-row">
             <input id="layout-cpu-fallback" type="checkbox" />
             <span>CUDA 兼容模式</span>
+          </label>
+
+          <label class="check-row">
+            <input id="heterogeneous-parallel" type="checkbox" />
+            <span>异构并行加速</span>
+          </label>
+
+          <label class="check-row">
+            <input id="debug-log-enabled" type="checkbox" />
+            <span>输出调试日志</span>
           </label>
 
           <div class="field-grid">

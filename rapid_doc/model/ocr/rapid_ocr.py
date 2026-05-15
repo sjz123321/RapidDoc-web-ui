@@ -104,6 +104,7 @@ class RapidOcrModel(object):
         default_params.pop('use_det_mode', None)
         default_params.pop('custom_model', None)
         default_params.pop('seal_enable', None)
+        default_params.pop('heterogeneous_parallel', None)
 
         if self.is_seal:
             # 印章识别参数

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import subprocess
 import sys
 import time
 import zipfile
+from contextlib import redirect_stderr, redirect_stdout
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Lock
@@ -23,6 +25,7 @@ from rapid_doc_ui.postprocess import polish_markdown_layout
 ROOT_DIR = Path(__file__).resolve().parents[1]
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 OUTPUT_ROOT = ROOT_DIR / "ui_output"
+LOG_ROOT = ROOT_DIR / "ui_logs"
 DEFAULT_TEST_PDF = ROOT_DIR.parent / "test.pdf"
 API_KEY_FILE_CANDIDATES = (ROOT_DIR.parent / "apikey.txt", ROOT_DIR / "apikey.txt")
 SILICONFLOW_BASE_URL = "https://api.siliconflow.cn/v1"
@@ -39,6 +42,7 @@ class ConvertResponse(BaseModel):
     middle_json_path: str | None = None
     content_json_path: str | None = None
     docx_path: str | None = None
+    log_path: str | None = None
     markdown_preview: str = ""
     html_preview: str = ""
     warnings: list[str] = []
@@ -51,7 +55,19 @@ JOBS: dict[str, dict] = {}
 JOBS_LOCK = Lock()
 DEVICE_LOCK = Lock()
 CURRENT_DEVICE_MODE: str | None = None
-VALID_DEVICE_MODES = {"cpu", "cuda", "cuda:0", "cuda:1", "npu", "npu:0"}
+VALID_DEVICE_MODES = {"cpu", "cuda", "cuda:0", "cuda:1", "npu", "npu:0", "directml"}
+DEVICE_MODE_ALIASES = {"dml": "directml", "amd": "directml"}
+
+
+def _normalize_device_mode(device_mode: str) -> str:
+    normalized = (device_mode or "cpu").strip().lower()
+    return DEVICE_MODE_ALIASES.get(normalized, normalized)
+
+
+def _rapid_doc_runtime_device_mode(device_mode: str) -> str:
+    # DirectML is applied per ONNXRuntime model; keep RapidDoc's global device on
+    # CPU so OCR keeps its stable CPU/OpenVINO path instead of falling through.
+    return "cpu" if device_mode == "directml" else device_mode
 
 
 def _set_job(job_id: str, **updates) -> None:
@@ -69,15 +85,16 @@ def _get_job(job_id: str) -> dict | None:
 
 def _apply_device_mode(device_mode: str) -> None:
     global CURRENT_DEVICE_MODE
-    normalized = (device_mode or "cpu").strip().lower()
+    normalized = _normalize_device_mode(device_mode)
     if normalized not in VALID_DEVICE_MODES:
-        raise ValueError("device_mode must be one of: cpu, cuda, cuda:0, cuda:1, npu, npu:0.")
+        raise ValueError("device_mode must be one of: cpu, cuda, cuda:0, cuda:1, npu, npu:0, directml.")
 
+    runtime_device_mode = _rapid_doc_runtime_device_mode(normalized)
     with DEVICE_LOCK:
-        if CURRENT_DEVICE_MODE == normalized and os.environ.get("MINERU_DEVICE_MODE") == normalized:
+        if CURRENT_DEVICE_MODE == normalized and os.environ.get("MINERU_DEVICE_MODE") == runtime_device_mode:
             return
 
-        os.environ["MINERU_DEVICE_MODE"] = normalized
+        os.environ["MINERU_DEVICE_MODE"] = runtime_device_mode
         CURRENT_DEVICE_MODE = normalized
 
         # RapidDoc caches initialized models globally; clear them when device changes.
@@ -93,7 +110,7 @@ def _apply_device_mode(device_mode: str) -> None:
             if "rapid_doc.utils.download_file" in sys.modules:
                 import rapid_doc.utils.download_file as download_file
 
-                download_file.device_mode = normalized
+                download_file.device_mode = runtime_device_mode
         except Exception:
             pass
 
@@ -144,6 +161,115 @@ def _clean_data_for_utf8(value):
 def _write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(_clean_text_for_utf8(text), encoding="utf-8")
+
+
+def _safe_log_params(params: dict) -> dict:
+    redacted = dict(params)
+    if redacted.get("third_party_api_key"):
+        redacted["third_party_api_key"] = "<redacted>"
+    if redacted.get("third_party_api_keys"):
+        redacted["third_party_api_keys"] = f"<{len(redacted['third_party_api_keys'])} keys>"
+    return redacted
+
+
+def _log_file_path(job_id: str) -> Path:
+    return LOG_ROOT / f"{job_id}.log"
+
+
+def _append_log_line(path: Path, message: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    with path.open("a", encoding="utf-8", errors="replace") as handle:
+        handle.write(f"[{timestamp}] {message}\n")
+
+
+class _TeeTextIO:
+    def __init__(self, original, log_handle) -> None:
+        self.original = original
+        self.log_handle = log_handle
+
+    def write(self, text: str) -> int:
+        self.original.write(text)
+        self.log_handle.write(text)
+        return len(text)
+
+    def flush(self) -> None:
+        self.original.flush()
+        self.log_handle.flush()
+
+    def isatty(self) -> bool:
+        return False
+
+
+class _JobLogCapture:
+    def __init__(self, enabled: bool, log_path: Path) -> None:
+        self.enabled = enabled
+        self.log_path = log_path
+        self._handle = None
+        self._stdout_cm = None
+        self._stderr_cm = None
+        self._loguru_sink_id = None
+        self._python_handler = None
+
+    def __enter__(self):
+        if not self.enabled:
+            return self
+
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        self._handle = self.log_path.open("a", encoding="utf-8", errors="replace")
+        self._stdout_cm = redirect_stdout(_TeeTextIO(sys.stdout, self._handle))
+        self._stderr_cm = redirect_stderr(_TeeTextIO(sys.stderr, self._handle))
+        self._stdout_cm.__enter__()
+        self._stderr_cm.__enter__()
+
+        try:
+            from loguru import logger
+
+            self._loguru_sink_id = logger.add(
+                self.log_path,
+                encoding="utf-8",
+                enqueue=True,
+                backtrace=True,
+                diagnose=False,
+                level="DEBUG",
+            )
+        except Exception:
+            self._loguru_sink_id = None
+
+        self._python_handler = logging.FileHandler(self.log_path, encoding="utf-8")
+        self._python_handler.setLevel(logging.DEBUG)
+        self._python_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s"))
+        logging.getLogger().addHandler(self._python_handler)
+        logging.getLogger().setLevel(logging.DEBUG)
+
+        _append_log_line(self.log_path, "Debug log capture started")
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        if not self.enabled:
+            return None
+
+        if exc is not None:
+            _append_log_line(self.log_path, f"Exception: {exc!r}")
+        _append_log_line(self.log_path, "Debug log capture finished")
+
+        if self._python_handler is not None:
+            logging.getLogger().removeHandler(self._python_handler)
+            self._python_handler.close()
+        if self._loguru_sink_id is not None:
+            try:
+                from loguru import logger
+
+                logger.remove(self._loguru_sink_id)
+            except Exception:
+                pass
+        if self._stderr_cm is not None:
+            self._stderr_cm.__exit__(exc_type, exc, tb)
+        if self._stdout_cm is not None:
+            self._stdout_cm.__exit__(exc_type, exc, tb)
+        if self._handle is not None:
+            self._handle.close()
+        return None
 
 
 def _read_api_keys_text(text: str) -> list[str]:
@@ -274,9 +400,12 @@ def device_diagnostics() -> dict:
             "device": ort.get_device(),
             "providers": providers,
             "has_cuda_provider": "CUDAExecutionProvider" in providers,
+            "has_directml_provider": "DmlExecutionProvider" in providers,
         }
         if "CUDAExecutionProvider" not in providers:
             diagnostics["warnings"].append("onnxruntime-gpu is not available in this Python environment.")
+        if "DmlExecutionProvider" not in providers:
+            diagnostics["warnings"].append("onnxruntime-directml is not available in this Python environment.")
     except Exception as exc:
         diagnostics["onnxruntime"] = {"error": str(exc)}
         diagnostics["warnings"].append("onnxruntime could not be imported.")
@@ -321,9 +450,13 @@ def device_diagnostics() -> dict:
 def _run_convert_job(job_id: str, input_name: str, input_bytes: bytes, params: dict) -> None:
     warnings: list[str] = []
     output_dir = OUTPUT_ROOT / job_id
+    debug_log_enabled = bool(params.get("debug_log_enabled"))
+    log_path = _log_file_path(job_id)
 
     def progress(percent: int, message: str) -> None:
         _set_job(job_id, status="running", percent=percent, message=message)
+        if debug_log_enabled:
+            _append_log_line(log_path, f"progress {percent}%: {message}")
 
     def api_progress(task: str, index: int | None, total: int | None) -> None:
         label_map = {"ocr": "OCR", "formula": "公式", "table": "表格"}
@@ -337,7 +470,49 @@ def _run_convert_job(job_id: str, input_name: str, input_bytes: bytes, params: d
         progress(45, message)
 
     try:
+        with _JobLogCapture(debug_log_enabled, log_path):
+            _run_convert_job_inner(
+                job_id,
+                input_name,
+                input_bytes,
+                params,
+                warnings,
+                output_dir,
+                progress,
+                api_progress,
+                api_key_event,
+                log_path if debug_log_enabled else None,
+            )
+    except Exception as exc:
+        if debug_log_enabled:
+            _append_log_line(log_path, f"Job failed: {exc!r}")
+        _set_job(
+            job_id,
+            status="failed",
+            percent=100,
+            message=f"转换失败：{exc}",
+            error=str(exc),
+            log_path=str(log_path) if debug_log_enabled else None,
+        )
+
+
+def _run_convert_job_inner(
+    job_id: str,
+    input_name: str,
+    input_bytes: bytes,
+    params: dict,
+    warnings: list[str],
+    output_dir: Path,
+    progress,
+    api_progress,
+    api_key_event,
+    log_path: Path | None,
+) -> None:
         progress(5, "准备输入文件")
+        if log_path:
+            _append_log_line(log_path, f"job_id={job_id}")
+            _append_log_line(log_path, f"input_name={input_name}")
+            _append_log_line(log_path, "params=" + json.dumps(_safe_log_params(params), ensure_ascii=False, indent=2))
         if output_dir.exists():
             shutil.rmtree(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -349,6 +524,8 @@ def _run_convert_job(job_id: str, input_name: str, input_bytes: bytes, params: d
         progress(10, "初始化解析配置")
         from rapid_doc import RapidDoc
         from rapid_doc.model.layout.rapid_layout_self import EngineType as LayoutEngineType
+        from rapid_doc.model.formula.rapid_formula_self import EngineType as FormulaEngineType
+        from rapid_doc.model.table.rapid_table_self import EngineType as TableEngineType
         from rapid_doc_ui.third_party import build_custom_model_configs
 
         settings = _settings_from_form(
@@ -369,7 +546,21 @@ def _run_convert_job(job_id: str, input_name: str, input_bytes: bytes, params: d
         progress(18, "加载 RapidDoc 模型")
         ocr_config, formula_config, table_config = build_custom_model_configs(settings)
         ocr_config["seal_enable"] = params["seal_enable"]
+        ocr_config["heterogeneous_parallel"] = params["heterogeneous_parallel"]
         layout_config = {}
+        if params["device_mode"] == "directml":
+            dml_engine_cfg = {"use_dml": True}
+            layout_config.update(
+                {
+                    "engine_type": LayoutEngineType.ONNXRUNTIME,
+                    "engine_cfg": dml_engine_cfg,
+                }
+            )
+            formula_config.setdefault("engine_type", FormulaEngineType.ONNXRUNTIME)
+            formula_config["engine_cfg"] = dml_engine_cfg
+            table_config.setdefault("engine_type", TableEngineType.ONNXRUNTIME)
+            table_config["engine_cfg"] = dml_engine_cfg
+            progress(18, "AMD/DirectML 模式：ONNX 模型尝试使用 DirectML，OCR 使用 CPU/OpenVINO")
         if params["layout_cpu_fallback"] and params["device_mode"].startswith("cuda"):
             layout_config["engine_type"] = LayoutEngineType.OPENVINO
             progress(18, "CUDA 兼容模式：版面模型使用 CPU/OpenVINO")
@@ -463,6 +654,9 @@ def _run_convert_job(job_id: str, input_name: str, input_bytes: bytes, params: d
             "lang": params["lang"],
             "device_mode": params["device_mode"],
             "layout_cpu_fallback": params["layout_cpu_fallback"],
+            "heterogeneous_parallel": params["heterogeneous_parallel"],
+            "debug_log_enabled": params["debug_log_enabled"],
+            "log_path": str(log_path) if log_path else None,
             "formula_enable": params["formula_enable"],
             "table_enable": params["table_enable"],
             "seal_enable": params["seal_enable"],
@@ -495,6 +689,7 @@ def _run_convert_job(job_id: str, input_name: str, input_bytes: bytes, params: d
             middle_json_path=str(middle_json_path) if middle_json_path else None,
             content_json_path=str(content_json_path) if content_json_path else None,
             docx_path=str(docx_path) if docx_path else None,
+            log_path=str(log_path) if log_path else None,
             markdown_preview=_clean_text_for_utf8(result.markdown[:60000]),
             html_preview=_clean_text_for_utf8(html_preview[:250000]),
             warnings=_clean_data_for_utf8(warnings),
@@ -507,14 +702,6 @@ def _run_convert_job(job_id: str, input_name: str, input_bytes: bytes, params: d
             message="转换完成",
             result=response.model_dump(),
         )
-    except Exception as exc:
-        _set_job(
-            job_id,
-            status="failed",
-            percent=100,
-            message=f"转换失败：{exc}",
-            error=str(exc),
-        )
 
 
 @app.post("/api/convert")
@@ -525,6 +712,8 @@ async def convert(
     lang: Annotated[str, Form()] = "ch",
     device_mode: Annotated[str, Form()] = "cpu",
     layout_cpu_fallback: Annotated[str, Form()] = "false",
+    heterogeneous_parallel: Annotated[str, Form()] = "false",
+    debug_log_enabled: Annotated[str, Form()] = "false",
     start_page: Annotated[int, Form()] = 0,
     end_page: Annotated[int | None, Form()] = None,
     formula_enable: Annotated[str, Form()] = "true",
@@ -562,8 +751,9 @@ async def convert(
     if parse_method not in {"auto", "ocr", "txt"}:
         raise HTTPException(status_code=400, detail="parse_method must be auto, ocr, or txt.")
     normalized_device_mode = (device_mode or "cpu").strip().lower()
+    normalized_device_mode = _normalize_device_mode(normalized_device_mode)
     if normalized_device_mode not in VALID_DEVICE_MODES:
-        raise HTTPException(status_code=400, detail="device_mode must be one of: cpu, cuda, cuda:0, cuda:1, npu, npu:0.")
+        raise HTTPException(status_code=400, detail="device_mode must be one of: cpu, cuda, cuda:0, cuda:1, npu, npu:0, directml.")
 
     project_api_keys, _ = _load_api_keys_from_project()
     uploaded_api_keys: list[str] = []
@@ -587,6 +777,8 @@ async def convert(
         "lang": lang,
         "device_mode": normalized_device_mode,
         "layout_cpu_fallback": _parse_bool(layout_cpu_fallback),
+        "heterogeneous_parallel": _parse_bool(heterogeneous_parallel),
+        "debug_log_enabled": _parse_bool(debug_log_enabled),
         "start_page": start_page,
         "end_page": end_page,
         "formula_enable": _parse_bool(formula_enable, True),
@@ -633,6 +825,14 @@ def download(job_id: str) -> FileResponse:
     if not zip_path.exists():
         raise HTTPException(status_code=404, detail="Zip file not found.")
     return FileResponse(zip_path, filename=zip_path.name, media_type="application/zip")
+
+
+@app.get("/api/log/{job_id}")
+def download_log(job_id: str) -> FileResponse:
+    log_path = _log_file_path(job_id)
+    if not log_path.exists() or not log_path.is_file():
+        raise HTTPException(status_code=404, detail="Log file not found.")
+    return FileResponse(log_path, filename=log_path.name, media_type="text/plain; charset=utf-8")
 
 
 @app.get("/api/file/{job_id}/{file_name}")

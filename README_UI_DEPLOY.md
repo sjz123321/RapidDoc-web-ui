@@ -8,6 +8,7 @@
 - Windows / Linux / macOS 均可运行
 - CPU 模式推荐，兼容性最好
 - GPU 模式仅建议 NVIDIA CUDA 环境使用
+- AMD 显卡可尝试 DirectML 实验模式
 
 ## 2. 安装依赖
 
@@ -37,6 +38,21 @@ python -m pip install -e ".[gpu,ui]"
 ```
 
 如果 GPU 依赖安装后不可用，请先使用 CPU 模式。
+
+AMD / DirectML 实验模式建议使用独立环境，避免 ONNXRuntime 包冲突：
+
+```powershell
+python -m pip uninstall -y onnxruntime onnxruntime-gpu onnxruntime-directml
+python -m pip install -e ".[directml,ui]"
+python -m pip uninstall -y onnxruntime onnxruntime-gpu
+python -m pip install --force-reinstall "onnxruntime-directml>=1.18.0,<1.24.0"
+```
+
+或安装依赖文件：
+
+```powershell
+python -m pip install -r requirements-ui-directml.txt
+```
 
 ## 3. 启动 UI
 
@@ -76,8 +92,32 @@ RapidDoc-main/ui_output/
 - `GPU / CUDA`
 - `GPU / CUDA:0`
 - `GPU / CUDA:1`
+- `AMD / DirectML（实验）`
 
 CPU 模式最稳定。GPU 模式使用 RapidDoc 的 `MINERU_DEVICE_MODE=cuda` 路线，主要面向 NVIDIA 显卡。
+
+DirectML 模式面向 Windows + AMD 显卡。当前实现为混合推理：OCR 仍使用 CPU/OpenVINO，版面、公式、表格等 ONNXRuntime 模型会尝试使用 `DmlExecutionProvider`。
+
+### 异构并行加速
+
+界面可勾选“异构并行加速”。该实验模式会在版面分析后并行执行：
+
+- CPU/OpenVINO OCR
+- CUDA 或 DirectML 公式识别
+
+表格识别仍会在 OCR 和公式完成后执行，因为表格处理可能依赖公式区域信息。
+
+该模式适合 CUDA、CUDA 兼容模式、DirectML 这类 CPU/GPU 混合场景。纯 CPU 模式下不一定更快。
+
+### 调试日志
+
+界面可勾选“输出调试日志”。开启后会在项目目录生成：
+
+```text
+RapidDoc-main/ui_logs/<job_id>.log
+```
+
+日志会记录任务参数、进度、RapidDoc / RapidOCR / ONNXRuntime 输出和异常信息。API Key 会在任务参数中脱敏。转换完成后可在“文件”页下载 Log。
 
 ## 6. 第三方 API
 
@@ -139,10 +179,27 @@ python -m pip install pypandoc-binary python-docx
 - 已安装支持 CUDA 的 `torch` / `torchvision`
 - 在浏览器打开 `http://127.0.0.1:7862/api/device-diagnostics`，确认：
   - `onnxruntime.has_cuda_provider` 为 `true`
+  - AMD/DirectML 模式下 `onnxruntime.has_directml_provider` 为 `true`
   - `torch.cuda_available` 为 `true`
   - `nvidia_smi.available` 为 `true`
 
 AMD 显卡不建议走这个 GPU 模式。
+
+### AMD / DirectML 不工作
+
+请确认：
+
+- 使用 Windows 系统
+- AMD 显卡驱动正常
+- 已安装 `onnxruntime-directml`
+- 如果曾安装 CPU/GPU 版 ONNXRuntime，最后重新执行过 `pip install --force-reinstall onnxruntime-directml`
+- `http://127.0.0.1:7862/api/device-diagnostics` 中 `onnxruntime.has_directml_provider` 为 `true`
+
+DirectML 是实验模式，部分模型或算子可能无法在 AMD GPU 上执行。如果遇到模型运行错误，请切回 CPU 模式。
+
+### 异构并行加速不明显
+
+请确认文档中有公式区域。当前实验模式主要并行 OCR 与公式识别；如果没有公式，或者公式模型也在 CPU 上运行，加速效果会很有限。
 
 如果日志里只有 `Could not determine GPU memory, using default batch_ratio: 1`，通常只是没有读取到显存大小，RapidDoc 会使用最小 batch 继续运行，不代表 GPU 初始化失败。
 
